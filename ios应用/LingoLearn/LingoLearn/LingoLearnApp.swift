@@ -33,7 +33,8 @@ enum WordLevel: String, Codable, CaseIterable, Identifiable {
 enum WordBook: String, Codable, CaseIterable, Identifiable {
     case cet4
     case cet6
-    case toefl
+    case toeflCore
+    case toeflFull
 
     var id: String { rawValue }
 
@@ -41,7 +42,8 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .cet4: return "四级"
         case .cet6: return "六级"
-        case .toefl: return "托福"
+        case .toeflCore: return "托福核心"
+        case .toeflFull: return "托福完整版"
         }
     }
 
@@ -49,7 +51,16 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .cet4: .cet4
         case .cet6: .cet6
-        case .toefl: .toefl
+        case .toeflCore, .toeflFull: .toefl
+        }
+    }
+
+    var bookTag: String {
+        switch self {
+        case .cet4: return "CET4"
+        case .cet6: return "CET6"
+        case .toeflCore: return "TOEFL_CORE"
+        case .toeflFull: return "TOEFL_FULL"
         }
     }
 
@@ -57,7 +68,8 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .cet4: return "BookCET4"
         case .cet6: return "BookCET6"
-        case .toefl: return "BookTOEFL"
+        case .toeflCore: return "BookTOEFLCore"
+        case .toeflFull: return "BookTOEFLFull"
         }
     }
 
@@ -65,7 +77,8 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .cet4: return "基础与高频词"
         case .cet6: return "进阶词汇强化"
-        case .toefl: return "学术场景词汇"
+        case .toeflCore: return "约 2000-2500 词"
+        case .toeflFull: return "约 5000-6000 词"
         }
     }
 
@@ -73,7 +86,31 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .cet4: return AppTheme.primary
         case .cet6: return AppTheme.accent
-        case .toefl: return .indigo
+        case .toeflCore: return .indigo
+        case .toeflFull: return .purple
+        }
+    }
+
+    static func title(forTag tag: String) -> String {
+        switch normalizeBookTag(tag) {
+        case "CET4": return "CET4"
+        case "CET6": return "CET6"
+        case "TOEFL_CORE": return "TOEFL Core"
+        case "TOEFL_FULL": return "TOEFL Full"
+        default: return tag
+        }
+    }
+
+    static func normalizeBookTag(_ tag: String) -> String {
+        switch tag.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case "TOEFL":
+            return "TOEFL_FULL"
+        case "TOEFL CORE":
+            return "TOEFL_CORE"
+        case "TOEFL FULL":
+            return "TOEFL_FULL"
+        default:
+            return tag.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         }
     }
 }
@@ -213,19 +250,30 @@ final class WordItem {
         set { levelRaw = newValue.rawValue }
     }
 
-    var bookTags: Set<WordLevel> {
+    var bookTags: Set<String> {
         get {
             if let bookTagsRaw, !bookTagsRaw.isEmpty {
                 let tags = bookTagsRaw
                     .split(separator: ",")
-                    .compactMap { WordLevel(rawValue: String($0)) }
+                    .map { WordBook.normalizeBookTag(String($0)) }
                 if !tags.isEmpty { return Set(tags) }
             }
-            return [level]
+            switch level {
+            case .cet4: return [WordBook.cet4.bookTag]
+            case .cet6: return [WordBook.cet6.bookTag]
+            case .toefl: return [WordBook.toeflFull.bookTag]
+            }
         }
         set {
-            let normalized = newValue.isEmpty ? [level] : newValue
-            let values = normalized.map(\.rawValue).sorted()
+            let fallback: Set<String> = {
+                switch level {
+                case .cet4: return [WordBook.cet4.bookTag]
+                case .cet6: return [WordBook.cet6.bookTag]
+                case .toefl: return [WordBook.toeflFull.bookTag]
+                }
+            }()
+            let normalized = newValue.isEmpty ? fallback : Set(newValue.map(WordBook.normalizeBookTag))
+            let values = normalized.sorted()
             bookTagsRaw = values.joined(separator: ",")
         }
     }
@@ -233,13 +281,13 @@ final class WordItem {
     var bookLabel: String {
         let tags = bookTags
         if tags.count == 1 {
-            return tags.first?.rawValue ?? level.rawValue
+            return WordBook.title(forTag: tags.first ?? level.rawValue)
         }
-        return tags.map(\.rawValue).sorted().joined(separator: " / ")
+        return tags.sorted().map(WordBook.title(forTag:)).joined(separator: " / ")
     }
 
     func matches(book: WordBook) -> Bool {
-        return bookTags.contains(book.level)
+        return bookTags.contains(book.bookTag)
     }
 
     var mastery: MasteryState {
@@ -594,6 +642,10 @@ struct DataBootstrapper {
                 settings.practiceQuestionCountRaw = 10
             }
             for settings in existingSettings {
+                if settings.selectedBookRaw == "toefl" {
+                    settings.selectedBookRaw = WordBook.toeflCore.rawValue
+                    continue
+                }
                 if let raw = settings.selectedBookRaw, WordBook(rawValue: raw) != nil {
                     continue
                 }
@@ -618,12 +670,11 @@ struct DataBootstrapper {
         for item in seedWords {
             let key = item.english.lowercased()
             let rawBooks = (item.books?.isEmpty == false ? item.books! : [item.level ?? WordLevel.cet4.rawValue])
-            let parsedBooks = Set(rawBooks.compactMap { WordLevel(rawValue: $0.uppercased()) })
-            let books = parsedBooks.isEmpty ? Set([WordLevel.cet4]) : parsedBooks
+            let parsedBooks = Set(rawBooks.map(WordBook.normalizeBookTag))
+            let books = parsedBooks.isEmpty ? Set([WordBook.cet4.bookTag]) : parsedBooks
             let primaryLevel: WordLevel =
-                books.contains(.cet4) ? .cet4 :
-                books.contains(.cet6) ? .cet6 :
-                .toefl
+                books.contains(WordBook.cet4.bookTag) ? .cet4 :
+                books.contains(WordBook.cet6.bookTag) ? .cet6 : .toefl
 
             if let existing = existingMap[key] {
                 // Keep学习进度字段，仅同步词条内容。
@@ -641,7 +692,7 @@ struct DataBootstrapper {
                     example: item.example,
                     exampleCn: item.exampleCn,
                     levelRaw: primaryLevel.rawValue,
-                    bookTagsRaw: books.map(\.rawValue).sorted().joined(separator: ",")
+                    bookTagsRaw: books.sorted().joined(separator: ",")
                 )
                 modelContext.insert(word)
                 existingMap[key] = word

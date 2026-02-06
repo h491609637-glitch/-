@@ -21,7 +21,7 @@
   - SM-2 自动复习调度
 - 练习测试：
   - 选择题 / 填空题 / 听力题
-  - 词书图片卡片选择（CET4 / CET6 / TOEFL）
+  - 词书图片卡片选择（CET4 / CET6 / TOEFL Core / TOEFL Full）
   - 倒计时进度条（可在设置中配置每题时间）
   - 每轮题数可调整（5-60）
   - 答对对勾动画、答错抖动动画
@@ -33,7 +33,7 @@
   - 成就徽章墙 + 解锁提示动画
 - 设置：
   - 每日目标（10-100）
-  - 当前词书切换（图片卡片：CET4 / CET6 / TOEFL）
+  - 当前词书切换（图片卡片：CET4 / CET6 / TOEFL Core / TOEFL Full）
   - 学习提醒开关 + 时间
   - 音效、震动、自动发音开关
   - 外观（系统/浅色/深色）
@@ -41,10 +41,15 @@
 
 ## 预置词库
 - 文件：`LingoLearn/Resources/SeedWords.json`
-- 唯一词条数：`3553`
-- 词书覆盖：`CET4`、`CET6`、`TOEFL`（每个词书可用词约 1500，含交叉词）
+- 唯一词条数：`6346`
+- 词书覆盖：
+  - `CET4`：1500
+  - `CET6`：1500
+  - `TOEFL Core`：2300
+  - `TOEFL Full`：5600
 
-> 词库来自 `kajweb/dict` 的 CET4 / CET6 / TOEFL 词书数据并做统一清洗，保留中文释义、音标和例句。
+> 词库来自 `kajweb/dict` 的 CET4 / CET6 / TOEFL 词书数据并做统一清洗，保留中文释义、音标和例句。  
+> `TOEFL Core` 为高频核心词，`TOEFL Full` 为完整词库（含 Core）。
 
 ## 运行说明
 1. 使用 Xcode 打开：`LingoLearn.xcodeproj`
