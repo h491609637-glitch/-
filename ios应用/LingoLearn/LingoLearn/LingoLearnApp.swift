@@ -204,6 +204,7 @@ final class UserSettings {
     var autoPlayPronunciation: Bool
     var appearanceRaw: String
     var perQuestionSeconds: Int
+    var practiceQuestionCountRaw: Int?
 
     init() {
         self.singletonKey = "default"
@@ -215,11 +216,17 @@ final class UserSettings {
         self.autoPlayPronunciation = true
         self.appearanceRaw = AppearanceMode.system.rawValue
         self.perQuestionSeconds = 15
+        self.practiceQuestionCountRaw = 10
     }
 
     var appearance: AppearanceMode {
         get { AppearanceMode(rawValue: appearanceRaw) ?? .system }
         set { appearanceRaw = newValue.rawValue }
+    }
+
+    var practiceQuestionCount: Int {
+        get { max(5, min(practiceQuestionCountRaw ?? 10, 60)) }
+        set { practiceQuestionCountRaw = max(5, min(newValue, 60)) }
     }
 }
 
@@ -479,6 +486,10 @@ struct DataBootstrapper {
         let existingSettings = try modelContext.fetch(settingsDescriptor)
         if existingSettings.isEmpty {
             modelContext.insert(UserSettings())
+        } else {
+            for settings in existingSettings where settings.practiceQuestionCountRaw == nil {
+                settings.practiceQuestionCountRaw = 10
+            }
         }
 
         let wordsDescriptor = FetchDescriptor<WordItem>()
@@ -1026,10 +1037,20 @@ struct PracticeHubView: View {
     @Query private var settings: [UserSettings]
 
     @State private var selectedType: PracticeType = .multipleChoice
-    @State private var questionsPerSession: Int = 10
     @State private var activeSession: PracticeSessionConfig?
 
     private var hapticsEnabled: Bool { settings.first?.hapticsEnabled ?? true }
+    private var configuredQuestionCount: Int { settings.first?.practiceQuestionCount ?? 10 }
+    private var questionCountBinding: Binding<Int> {
+        Binding(
+            get: { settings.first?.practiceQuestionCount ?? 10 },
+            set: { newValue in
+                guard let userSettings = settings.first else { return }
+                userSettings.practiceQuestionCount = newValue
+                try? modelContext.save()
+            }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -1043,7 +1064,7 @@ struct PracticeHubView: View {
 
                 PracticeTypeCard(type: selectedType)
 
-                Stepper("每轮题数：\(questionsPerSession)", value: $questionsPerSession, in: 5...20)
+                Stepper("每轮题数：\(configuredQuestionCount)", value: questionCountBinding, in: 5...60)
                     .padding()
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
@@ -1064,7 +1085,7 @@ struct PracticeHubView: View {
                 Button {
                     startSession(random: true)
                 } label: {
-                    Label("随机测试（10题）", systemImage: "shuffle")
+                    Label("随机测试（\(configuredQuestionCount)题）", systemImage: "shuffle")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -1086,7 +1107,8 @@ struct PracticeHubView: View {
     private func startSession(random: Bool) {
         Haptics.impact(.medium, enabled: hapticsEnabled)
         let type = random ? PracticeType.allCases.randomElement() ?? .multipleChoice : selectedType
-        let count = random ? 10 : questionsPerSession
+        let preferredCount = settings.first?.practiceQuestionCount ?? 10
+        let count = min(max(5, preferredCount), max(4, words.count))
         activeSession = PracticeSessionConfig(type: type, questionCount: count)
     }
 }
@@ -1740,6 +1762,11 @@ struct SettingsView: View {
                             get: { settings.perQuestionSeconds },
                             set: { settings.perQuestionSeconds = $0 }
                         ), in: 5...60)
+
+                        Stepper("每轮练习题数：\(settings.practiceQuestionCount)", value: Binding(
+                            get: { settings.practiceQuestionCount },
+                            set: { settings.practiceQuestionCount = $0 }
+                        ), in: 5...60)
                     }
 
                     Section("提醒") {
@@ -1811,6 +1838,7 @@ struct SettingsView: View {
             .onChange(of: settingsList.first?.autoPlayPronunciation) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.appearanceRaw) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.perQuestionSeconds) { _, _ in saveSettings() }
+            .onChange(of: settingsList.first?.practiceQuestionCountRaw) { _, _ in saveSettings() }
             .alert("确认重置", isPresented: $showResetAlert) {
                 Button("取消", role: .cancel) {}
                 Button("确认重置", role: .destructive) {
