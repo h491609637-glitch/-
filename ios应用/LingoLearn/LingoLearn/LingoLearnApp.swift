@@ -25,8 +25,36 @@ private enum AppTheme {
 enum WordLevel: String, Codable, CaseIterable, Identifiable {
     case cet4 = "CET4"
     case cet6 = "CET6"
+    case toefl = "TOEFL"
 
     var id: String { rawValue }
+}
+
+enum WordBook: String, Codable, CaseIterable, Identifiable {
+    case all
+    case cet4
+    case cet6
+    case toefl
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .cet4: return "四级"
+        case .cet6: return "六级"
+        case .toefl: return "托福"
+        }
+    }
+
+    var level: WordLevel? {
+        switch self {
+        case .all: return nil
+        case .cet4: return .cet4
+        case .cet6: return .cet6
+        case .toefl: return .toefl
+        }
+    }
 }
 
 enum MasteryState: String, Codable, CaseIterable, Identifiable {
@@ -121,6 +149,7 @@ final class WordItem {
     var meaning: String
     var example: String
     var levelRaw: String
+    var bookTagsRaw: String?
     var masteryRaw: String
     var isFavorite: Bool
     var efactor: Double
@@ -130,13 +159,14 @@ final class WordItem {
     var lastReviewedAt: Date?
     var createdAt: Date
 
-    init(english: String, phonetic: String, meaning: String, example: String, levelRaw: String) {
+    init(english: String, phonetic: String, meaning: String, example: String, levelRaw: String, bookTagsRaw: String? = nil) {
         self.id = UUID()
         self.english = english
         self.phonetic = phonetic
         self.meaning = meaning
         self.example = example
         self.levelRaw = levelRaw
+        self.bookTagsRaw = bookTagsRaw
         self.masteryRaw = MasteryState.newWord.rawValue
         self.isFavorite = false
         self.efactor = 2.5
@@ -150,6 +180,36 @@ final class WordItem {
     var level: WordLevel {
         get { WordLevel(rawValue: levelRaw) ?? .cet4 }
         set { levelRaw = newValue.rawValue }
+    }
+
+    var bookTags: Set<WordLevel> {
+        get {
+            if let bookTagsRaw, !bookTagsRaw.isEmpty {
+                let tags = bookTagsRaw
+                    .split(separator: ",")
+                    .compactMap { WordLevel(rawValue: String($0)) }
+                if !tags.isEmpty { return Set(tags) }
+            }
+            return [level]
+        }
+        set {
+            let normalized = newValue.isEmpty ? [level] : newValue
+            let values = normalized.map(\.rawValue).sorted()
+            bookTagsRaw = values.joined(separator: ",")
+        }
+    }
+
+    var bookLabel: String {
+        let tags = bookTags
+        if tags.count == 1 {
+            return tags.first?.rawValue ?? level.rawValue
+        }
+        return tags.map(\.rawValue).sorted().joined(separator: " / ")
+    }
+
+    func matches(book: WordBook) -> Bool {
+        guard let target = book.level else { return true }
+        return bookTags.contains(target)
     }
 
     var mastery: MasteryState {
@@ -203,6 +263,7 @@ final class UserSettings {
     var hapticsEnabled: Bool
     var autoPlayPronunciation: Bool
     var appearanceRaw: String
+    var selectedBookRaw: String?
     var perQuestionSeconds: Int
     var practiceQuestionCountRaw: Int?
 
@@ -215,6 +276,7 @@ final class UserSettings {
         self.hapticsEnabled = true
         self.autoPlayPronunciation = true
         self.appearanceRaw = AppearanceMode.system.rawValue
+        self.selectedBookRaw = WordBook.all.rawValue
         self.perQuestionSeconds = 15
         self.practiceQuestionCountRaw = 10
     }
@@ -222,6 +284,11 @@ final class UserSettings {
     var appearance: AppearanceMode {
         get { AppearanceMode(rawValue: appearanceRaw) ?? .system }
         set { appearanceRaw = newValue.rawValue }
+    }
+
+    var selectedBook: WordBook {
+        get { WordBook(rawValue: selectedBookRaw ?? WordBook.all.rawValue) ?? .all }
+        set { selectedBookRaw = newValue.rawValue }
     }
 
     var practiceQuestionCount: Int {
@@ -235,7 +302,8 @@ struct SeedWord: Codable {
     let phonetic: String
     let meaning: String
     let example: String
-    let level: String
+    let level: String?
+    let books: [String]?
 }
 
 // MARK: - App Models
@@ -477,6 +545,10 @@ struct StudyAnalytics {
     }
 }
 
+func filterWords(_ words: [WordItem], by book: WordBook) -> [WordItem] {
+    words.filter { $0.matches(book: book) }
+}
+
 // MARK: - Bootstrap
 
 @MainActor
@@ -489,6 +561,9 @@ struct DataBootstrapper {
         } else {
             for settings in existingSettings where settings.practiceQuestionCountRaw == nil {
                 settings.practiceQuestionCountRaw = 10
+            }
+            for settings in existingSettings where settings.selectedBookRaw == nil {
+                settings.selectedBookRaw = WordBook.all.rawValue
             }
         }
 
@@ -508,19 +583,29 @@ struct DataBootstrapper {
 
         for item in seedWords {
             let key = item.english.lowercased()
+            let rawBooks = (item.books?.isEmpty == false ? item.books! : [item.level ?? WordLevel.cet4.rawValue])
+            let parsedBooks = Set(rawBooks.compactMap { WordLevel(rawValue: $0.uppercased()) })
+            let books = parsedBooks.isEmpty ? Set([WordLevel.cet4]) : parsedBooks
+            let primaryLevel: WordLevel =
+                books.contains(.cet4) ? .cet4 :
+                books.contains(.cet6) ? .cet6 :
+                .toefl
+
             if let existing = existingMap[key] {
                 // Keep学习进度字段，仅同步词条内容。
                 existing.phonetic = item.phonetic
                 existing.meaning = item.meaning
                 existing.example = item.example
-                existing.levelRaw = item.level
+                existing.levelRaw = primaryLevel.rawValue
+                existing.bookTags = existing.bookTags.union(books)
             } else {
                 let word = WordItem(
                     english: key,
                     phonetic: item.phonetic,
                     meaning: item.meaning,
                     example: item.example,
-                    levelRaw: item.level
+                    levelRaw: primaryLevel.rawValue,
+                    bookTagsRaw: books.map(\.rawValue).sorted().joined(separator: ",")
                 )
                 modelContext.insert(word)
                 existingMap[key] = word
@@ -572,7 +657,7 @@ struct AppRootView: View {
         Group {
             switch appState.bootstrapState {
             case .idle, .loading:
-                LoadingStateView(title: "正在准备词库", subtitle: "首次启动会加载 500+ 预置单词")
+                LoadingStateView(title: "正在准备词库", subtitle: "首次启动会加载多词书预置单词")
             case .ready:
                 RootTabView()
             case .failed(let message):
@@ -654,7 +739,9 @@ struct HomeView: View {
 
     private var todayProgress: Int { StudyAnalytics.todayCount(records: records) }
     private var dailyGoal: Int { settings.first?.dailyGoal ?? 30 }
-    private var dueCount: Int { words.filter { $0.dueDate <= .now }.count }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var filteredWords: [WordItem] { filterWords(words, by: selectedBook) }
+    private var dueCount: Int { filteredWords.filter { $0.dueDate <= .now }.count }
     private var streakDays: Int { StudyAnalytics.streakDays(from: records) }
 
     var body: some View {
@@ -713,7 +800,7 @@ struct HomeView: View {
 
                         QuickActionCard(
                             title: "随机测试",
-                            subtitle: "10题冲刺",
+                            subtitle: "\(settings.first?.practiceQuestionCount ?? 10)题冲刺",
                             icon: "shuffle.circle.fill",
                             color: .indigo
                         ) {
@@ -724,6 +811,16 @@ struct HomeView: View {
                             }
                         }
                     }
+
+                    HStack {
+                        Label("当前词书", systemImage: "books.vertical.fill")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(selectedBook.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.primary)
+                    }
+                    .padding(.horizontal, 4)
 
                     if dueCount > 0 {
                         HStack {
@@ -783,6 +880,18 @@ struct LearnView: View {
     private var hapticsEnabled: Bool { settings.first?.hapticsEnabled ?? true }
     private var soundEnabled: Bool { settings.first?.soundEnabled ?? true }
     private var autoPlay: Bool { settings.first?.autoPlayPronunciation ?? true }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var selectedBookBinding: Binding<WordBook> {
+        Binding(
+            get: { settings.first?.selectedBook ?? .all },
+            set: { newValue in
+                guard let userSettings = settings.first else { return }
+                userSettings.selectedBook = newValue
+                try? modelContext.save()
+                refreshSession(resetRound: true)
+            }
+        )
+    }
 
     private var currentWord: WordItem? {
         guard currentIndex >= 0, currentIndex < sessionWords.count else { return nil }
@@ -797,6 +906,13 @@ struct LearnView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 18) {
+                Picker("词书", selection: selectedBookBinding) {
+                    ForEach(WordBook.allCases) { book in
+                        Text(book.title).tag(book)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 header
 
                 if let word = currentWord {
@@ -890,6 +1006,9 @@ struct LearnView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(reviewOnly ? "复习模式" : "学习模式")
                     .font(.headline)
+                Text("词书：\(selectedBook.title)")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.primary)
                 Text("\(displayIndex)/\(sessionWords.count)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -941,8 +1060,9 @@ struct LearnView: View {
     }
 
     private func refreshSession(resetRound: Bool) {
-        let dueWords = words.filter { $0.dueDate <= .now }
-        let newWords = words.filter { $0.mastery == .newWord }
+        let scopedWords = filterWords(words, by: selectedBook)
+        let dueWords = scopedWords.filter { $0.dueDate <= .now }
+        let newWords = scopedWords.filter { $0.mastery == .newWord }
 
         let pool: [WordItem]
         if reviewOnly {
@@ -1040,13 +1160,35 @@ struct PracticeHubView: View {
     @State private var activeSession: PracticeSessionConfig?
 
     private var hapticsEnabled: Bool { settings.first?.hapticsEnabled ?? true }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var activeWords: [WordItem] { filterWords(words, by: selectedBook) }
     private var configuredQuestionCount: Int { settings.first?.practiceQuestionCount ?? 10 }
+    private var selectedBookBinding: Binding<WordBook> {
+        Binding(
+            get: { settings.first?.selectedBook ?? .all },
+            set: { newValue in
+                guard let userSettings = settings.first else { return }
+                userSettings.selectedBook = newValue
+                try? modelContext.save()
+            }
+        )
+    }
     private var questionCountBinding: Binding<Int> {
         Binding(
             get: { settings.first?.practiceQuestionCount ?? 10 },
             set: { newValue in
                 guard let userSettings = settings.first else { return }
                 userSettings.practiceQuestionCount = newValue
+                try? modelContext.save()
+            }
+        )
+    }
+    private var questionCountSliderBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.first?.practiceQuestionCount ?? 10) },
+            set: { newValue in
+                guard let userSettings = settings.first else { return }
+                userSettings.practiceQuestionCount = Int(newValue.rounded())
                 try? modelContext.save()
             }
         )
@@ -1062,13 +1204,51 @@ struct PracticeHubView: View {
                 }
                 .pickerStyle(.segmented)
 
+                Picker("词书", selection: selectedBookBinding) {
+                    ForEach(WordBook.allCases) { book in
+                        Text(book.title).tag(book)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 PracticeTypeCard(type: selectedType)
 
-                Stepper("每轮题数：\(configuredQuestionCount)", value: questionCountBinding, in: 5...60)
-                    .padding()
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("每轮题数")
+                        Spacer()
+                        Text("\(configuredQuestionCount)")
+                            .font(.headline)
+                            .foregroundStyle(AppTheme.primary)
+                    }
 
-                if words.count < 4 {
+                    Slider(value: questionCountSliderBinding, in: 5...60, step: 1)
+                        .tint(AppTheme.primary)
+
+                    HStack(spacing: 8) {
+                        ForEach([10, 20, 30, 40, 50, 60], id: \.self) { value in
+                            Button {
+                                questionCountBinding.wrappedValue = value
+                            } label: {
+                                Text("\(value)")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        configuredQuestionCount == value
+                                            ? AppTheme.primary.opacity(0.22)
+                                            : Color(uiColor: .secondarySystemBackground),
+                                        in: Capsule()
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                if activeWords.count < 4 {
                     EmptyStateView(title: "词库数量不足", subtitle: "至少需要 4 个单词才能开始测试")
                 }
 
@@ -1080,7 +1260,7 @@ struct PracticeHubView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.primary)
-                .disabled(words.count < 4)
+                .disabled(activeWords.count < 4)
 
                 Button {
                     startSession(random: true)
@@ -1089,7 +1269,7 @@ struct PracticeHubView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(words.count < 4)
+                .disabled(activeWords.count < 4)
 
                 Spacer()
             }
@@ -1105,11 +1285,12 @@ struct PracticeHubView: View {
     }
 
     private func startSession(random: Bool) {
+        guard activeWords.count >= 4 else { return }
         Haptics.impact(.medium, enabled: hapticsEnabled)
         let type = random ? PracticeType.allCases.randomElement() ?? .multipleChoice : selectedType
         let preferredCount = settings.first?.practiceQuestionCount ?? 10
-        let count = min(max(5, preferredCount), max(4, words.count))
-        activeSession = PracticeSessionConfig(type: type, questionCount: count)
+        let count = min(max(5, preferredCount), max(4, activeWords.count))
+        activeSession = PracticeSessionConfig(type: type, questionCount: count, wordBook: selectedBook)
     }
 }
 
@@ -1117,6 +1298,7 @@ struct PracticeSessionConfig: Identifiable {
     let id = UUID()
     let type: PracticeType
     let questionCount: Int
+    let wordBook: WordBook
 }
 
 struct PracticeSessionView: View {
@@ -1327,7 +1509,8 @@ struct PracticeSessionView: View {
     }
 
     private func setupSession() {
-        let sourceWords = Array(words.shuffled().prefix(max(config.questionCount, 4)))
+        let scopedWords = filterWords(words, by: config.wordBook)
+        let sourceWords = Array(scopedWords.shuffled().prefix(max(config.questionCount, 4)))
         questions = Self.generateQuestions(type: config.type, words: sourceWords, count: config.questionCount)
         remainingSeconds = perQuestionSeconds
 
@@ -1763,10 +1946,36 @@ struct SettingsView: View {
                             set: { settings.perQuestionSeconds = $0 }
                         ), in: 5...60)
 
-                        Stepper("每轮练习题数：\(settings.practiceQuestionCount)", value: Binding(
-                            get: { settings.practiceQuestionCount },
-                            set: { settings.practiceQuestionCount = $0 }
-                        ), in: 5...60)
+                        VStack(alignment: .leading) {
+                            HStack {
+                                Text("每轮练习题数")
+                                Spacer()
+                                Text("\(settings.practiceQuestionCount)")
+                                    .foregroundStyle(AppTheme.primary)
+                            }
+
+                            Slider(
+                                value: Binding(
+                                    get: { Double(settings.practiceQuestionCount) },
+                                    set: { settings.practiceQuestionCount = Int($0.rounded()) }
+                                ),
+                                in: 5...60,
+                                step: 1
+                            )
+                            .tint(AppTheme.primary)
+                        }
+                    }
+
+                    Section("词书") {
+                        Picker("当前词书", selection: Binding(
+                            get: { settings.selectedBook },
+                            set: { settings.selectedBook = $0 }
+                        )) {
+                            ForEach(WordBook.allCases) { book in
+                                Text(book.title).tag(book)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
 
                     Section("提醒") {
@@ -1837,6 +2046,7 @@ struct SettingsView: View {
             .onChange(of: settingsList.first?.hapticsEnabled) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.autoPlayPronunciation) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.appearanceRaw) { _, _ in saveSettings() }
+            .onChange(of: settingsList.first?.selectedBookRaw) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.perQuestionSeconds) { _, _ in saveSettings() }
             .onChange(of: settingsList.first?.practiceQuestionCountRaw) { _, _ in saveSettings() }
             .alert("确认重置", isPresented: $showResetAlert) {
@@ -2024,7 +2234,7 @@ struct FlashcardView: View {
             Spacer()
 
             HStack {
-                Text(word.level.rawValue)
+                Text(word.bookLabel)
                     .font(.caption.bold())
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
