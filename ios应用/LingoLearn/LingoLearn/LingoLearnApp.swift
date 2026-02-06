@@ -484,26 +484,35 @@ struct DataBootstrapper {
         let wordsDescriptor = FetchDescriptor<WordItem>()
         let existingWords = try modelContext.fetch(wordsDescriptor)
 
-        if existingWords.isEmpty {
-            let url = Bundle.main.url(forResource: "SeedWords", withExtension: "json")
-                ?? Bundle.main.url(forResource: "SeedWords", withExtension: "json", subdirectory: "Resources")
+        let url = Bundle.main.url(forResource: "SeedWords", withExtension: "json")
+            ?? Bundle.main.url(forResource: "SeedWords", withExtension: "json", subdirectory: "Resources")
 
-            guard let url else {
-                throw NSError(domain: "LingoLearn", code: 404, userInfo: [NSLocalizedDescriptionKey: "找不到 SeedWords.json"])
-            }
+        guard let url else {
+            throw NSError(domain: "LingoLearn", code: 404, userInfo: [NSLocalizedDescriptionKey: "找不到 SeedWords.json"])
+        }
 
-            let data = try Data(contentsOf: url)
-            let seedWords = try JSONDecoder().decode([SeedWord].self, from: data)
+        let data = try Data(contentsOf: url)
+        let seedWords = try JSONDecoder().decode([SeedWord].self, from: data)
+        var existingMap = Dictionary(uniqueKeysWithValues: existingWords.map { ($0.english.lowercased(), $0) })
 
-            for item in seedWords {
+        for item in seedWords {
+            let key = item.english.lowercased()
+            if let existing = existingMap[key] {
+                // Keep学习进度字段，仅同步词条内容。
+                existing.phonetic = item.phonetic
+                existing.meaning = item.meaning
+                existing.example = item.example
+                existing.levelRaw = item.level
+            } else {
                 let word = WordItem(
-                    english: item.english.lowercased(),
+                    english: key,
                     phonetic: item.phonetic,
                     meaning: item.meaning,
                     example: item.example,
                     levelRaw: item.level
                 )
                 modelContext.insert(word)
+                existingMap[key] = word
             }
         }
 
@@ -933,7 +942,8 @@ struct LearnView: View {
             pool = combined.filter { seen.insert($0.english).inserted }
         }
 
-        sessionWords = Array(pool.shuffled().prefix(20))
+        let sessionSize = min(max(settings.first?.dailyGoal ?? 30, 30), 80)
+        sessionWords = Array(pool.shuffled().prefix(sessionSize))
         currentIndex = 0
         isFlipped = false
 
@@ -1389,16 +1399,20 @@ struct PracticeSessionView: View {
             case .multipleChoice:
                 let distractors = safePool
                     .filter { $0.english != word.english }
+                    .filter { $0.meaning != word.meaning }
                     .shuffled()
                     .prefix(3)
                     .map(\.meaning)
-                let options = (distractors + [word.meaning]).shuffled()
+                var options = Array(Set(distractors + [word.meaning])).shuffled()
+                while options.count < 4 {
+                    options.append("（干扰项）\(Int.random(in: 100...999))")
+                }
                 return PracticeQuestion(
                     type: type,
                     word: word.english,
                     prompt: "\(word.english) \(word.phonetic)",
                     answer: word.meaning,
-                    options: options,
+                    options: Array(options.prefix(4)).shuffled(),
                     helperMeaning: word.meaning
                 )
 
@@ -1418,13 +1432,16 @@ struct PracticeSessionView: View {
                     .shuffled()
                     .prefix(3)
                     .map(\.english)
-                let options = (distractors + [word.english]).shuffled()
+                var options = Array(Set(distractors + [word.english])).shuffled()
+                while options.count < 4 {
+                    options.append("word\(Int.random(in: 100...999))")
+                }
                 return PracticeQuestion(
                     type: type,
                     word: word.english,
                     prompt: "听发音",
                     answer: word.english,
-                    options: options,
+                    options: Array(options.prefix(4)).shuffled(),
                     helperMeaning: word.meaning
                 )
             }
