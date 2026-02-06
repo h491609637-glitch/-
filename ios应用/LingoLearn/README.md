@@ -52,6 +52,18 @@
 3. `Cmd + R` 运行
 4. 首次启动会自动导入预置词库并初始化设置
 
+## 托福词库一键构建
+在仓库根目录运行（Mac/Linux）：
+
+```bash
+bash scripts/run_toefl_build.sh
+```
+
+说明：
+- 脚本会自动创建 `.venv` 并安装 `pandas`、`requests`
+- 默认执行 `--download` 并输出到 `./output`
+- 如只用本地 `./data` 重新构建，可加 `--no-download`
+
 ## 目录结构
 ```
 LingoLearn/
