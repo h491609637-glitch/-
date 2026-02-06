@@ -31,7 +31,6 @@ enum WordLevel: String, Codable, CaseIterable, Identifiable {
 }
 
 enum WordBook: String, Codable, CaseIterable, Identifiable {
-    case all
     case cet4
     case cet6
     case toefl
@@ -40,19 +39,41 @@ enum WordBook: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .all: return "全部"
         case .cet4: return "四级"
         case .cet6: return "六级"
         case .toefl: return "托福"
         }
     }
 
-    var level: WordLevel? {
+    var level: WordLevel {
         switch self {
-        case .all: return nil
-        case .cet4: return .cet4
-        case .cet6: return .cet6
-        case .toefl: return .toefl
+        case .cet4: .cet4
+        case .cet6: .cet6
+        case .toefl: .toefl
+        }
+    }
+
+    var coverAssetName: String {
+        switch self {
+        case .cet4: return "BookCET4"
+        case .cet6: return "BookCET6"
+        case .toefl: return "BookTOEFL"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .cet4: return "基础与高频词"
+        case .cet6: return "进阶词汇强化"
+        case .toefl: return "学术场景词汇"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cet4: return AppTheme.primary
+        case .cet6: return AppTheme.accent
+        case .toefl: return .indigo
         }
     }
 }
@@ -148,6 +169,7 @@ final class WordItem {
     var phonetic: String
     var meaning: String
     var example: String
+    var exampleCn: String?
     var levelRaw: String
     var bookTagsRaw: String?
     var masteryRaw: String
@@ -159,12 +181,21 @@ final class WordItem {
     var lastReviewedAt: Date?
     var createdAt: Date
 
-    init(english: String, phonetic: String, meaning: String, example: String, levelRaw: String, bookTagsRaw: String? = nil) {
+    init(
+        english: String,
+        phonetic: String,
+        meaning: String,
+        example: String,
+        exampleCn: String? = nil,
+        levelRaw: String,
+        bookTagsRaw: String? = nil
+    ) {
         self.id = UUID()
         self.english = english
         self.phonetic = phonetic
         self.meaning = meaning
         self.example = example
+        self.exampleCn = exampleCn
         self.levelRaw = levelRaw
         self.bookTagsRaw = bookTagsRaw
         self.masteryRaw = MasteryState.newWord.rawValue
@@ -208,8 +239,7 @@ final class WordItem {
     }
 
     func matches(book: WordBook) -> Bool {
-        guard let target = book.level else { return true }
-        return bookTags.contains(target)
+        return bookTags.contains(book.level)
     }
 
     var mastery: MasteryState {
@@ -276,7 +306,7 @@ final class UserSettings {
         self.hapticsEnabled = true
         self.autoPlayPronunciation = true
         self.appearanceRaw = AppearanceMode.system.rawValue
-        self.selectedBookRaw = WordBook.all.rawValue
+        self.selectedBookRaw = WordBook.cet4.rawValue
         self.perQuestionSeconds = 15
         self.practiceQuestionCountRaw = 10
     }
@@ -287,7 +317,7 @@ final class UserSettings {
     }
 
     var selectedBook: WordBook {
-        get { WordBook(rawValue: selectedBookRaw ?? WordBook.all.rawValue) ?? .all }
+        get { WordBook(rawValue: selectedBookRaw ?? WordBook.cet4.rawValue) ?? .cet4 }
         set { selectedBookRaw = newValue.rawValue }
     }
 
@@ -302,6 +332,7 @@ struct SeedWord: Codable {
     let phonetic: String
     let meaning: String
     let example: String
+    let exampleCn: String?
     let level: String?
     let books: [String]?
 }
@@ -562,8 +593,11 @@ struct DataBootstrapper {
             for settings in existingSettings where settings.practiceQuestionCountRaw == nil {
                 settings.practiceQuestionCountRaw = 10
             }
-            for settings in existingSettings where settings.selectedBookRaw == nil {
-                settings.selectedBookRaw = WordBook.all.rawValue
+            for settings in existingSettings {
+                if let raw = settings.selectedBookRaw, WordBook(rawValue: raw) != nil {
+                    continue
+                }
+                settings.selectedBookRaw = WordBook.cet4.rawValue
             }
         }
 
@@ -596,6 +630,7 @@ struct DataBootstrapper {
                 existing.phonetic = item.phonetic
                 existing.meaning = item.meaning
                 existing.example = item.example
+                existing.exampleCn = item.exampleCn
                 existing.levelRaw = primaryLevel.rawValue
                 existing.bookTags = existing.bookTags.union(books)
             } else {
@@ -604,6 +639,7 @@ struct DataBootstrapper {
                     phonetic: item.phonetic,
                     meaning: item.meaning,
                     example: item.example,
+                    exampleCn: item.exampleCn,
                     levelRaw: primaryLevel.rawValue,
                     bookTagsRaw: books.map(\.rawValue).sorted().joined(separator: ",")
                 )
@@ -739,7 +775,7 @@ struct HomeView: View {
 
     private var todayProgress: Int { StudyAnalytics.todayCount(records: records) }
     private var dailyGoal: Int { settings.first?.dailyGoal ?? 30 }
-    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .cet4 }
     private var filteredWords: [WordItem] { filterWords(words, by: selectedBook) }
     private var dueCount: Int { filteredWords.filter { $0.dueDate <= .now }.count }
     private var streakDays: Int { StudyAnalytics.streakDays(from: records) }
@@ -880,10 +916,10 @@ struct LearnView: View {
     private var hapticsEnabled: Bool { settings.first?.hapticsEnabled ?? true }
     private var soundEnabled: Bool { settings.first?.soundEnabled ?? true }
     private var autoPlay: Bool { settings.first?.autoPlayPronunciation ?? true }
-    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .cet4 }
     private var selectedBookBinding: Binding<WordBook> {
         Binding(
-            get: { settings.first?.selectedBook ?? .all },
+            get: { settings.first?.selectedBook ?? .cet4 },
             set: { newValue in
                 guard let userSettings = settings.first else { return }
                 userSettings.selectedBook = newValue
@@ -906,12 +942,11 @@ struct LearnView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 18) {
-                Picker("词书", selection: selectedBookBinding) {
-                    ForEach(WordBook.allCases) { book in
-                        Text(book.title).tag(book)
-                    }
-                }
-                .pickerStyle(.segmented)
+                WordBookImageSelector(
+                    selectedBook: selectedBookBinding,
+                    words: words,
+                    cardHeight: 116
+                )
 
                 header
 
@@ -1160,12 +1195,12 @@ struct PracticeHubView: View {
     @State private var activeSession: PracticeSessionConfig?
 
     private var hapticsEnabled: Bool { settings.first?.hapticsEnabled ?? true }
-    private var selectedBook: WordBook { settings.first?.selectedBook ?? .all }
+    private var selectedBook: WordBook { settings.first?.selectedBook ?? .cet4 }
     private var activeWords: [WordItem] { filterWords(words, by: selectedBook) }
     private var configuredQuestionCount: Int { settings.first?.practiceQuestionCount ?? 10 }
     private var selectedBookBinding: Binding<WordBook> {
         Binding(
-            get: { settings.first?.selectedBook ?? .all },
+            get: { settings.first?.selectedBook ?? .cet4 },
             set: { newValue in
                 guard let userSettings = settings.first else { return }
                 userSettings.selectedBook = newValue
@@ -1204,12 +1239,11 @@ struct PracticeHubView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Picker("词书", selection: selectedBookBinding) {
-                    ForEach(WordBook.allCases) { book in
-                        Text(book.title).tag(book)
-                    }
-                }
-                .pickerStyle(.segmented)
+                WordBookImageSelector(
+                    selectedBook: selectedBookBinding,
+                    words: words,
+                    cardHeight: 110
+                )
 
                 PracticeTypeCard(type: selectedType)
 
@@ -1967,15 +2001,14 @@ struct SettingsView: View {
                     }
 
                     Section("词书") {
-                        Picker("当前词书", selection: Binding(
-                            get: { settings.selectedBook },
-                            set: { settings.selectedBook = $0 }
-                        )) {
-                            ForEach(WordBook.allCases) { book in
-                                Text(book.title).tag(book)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        WordBookImageSelector(
+                            selectedBook: Binding(
+                                get: { settings.selectedBook },
+                                set: { settings.selectedBook = $0 }
+                            ),
+                            words: words,
+                            cardHeight: 102
+                        )
                     }
 
                     Section("提醒") {
@@ -2231,6 +2264,12 @@ struct FlashcardView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
 
+            if let exampleCn = word.exampleCn, !exampleCn.isEmpty {
+                Text(exampleCn)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary.opacity(0.86))
+            }
+
             Spacer()
 
             HStack {
@@ -2285,6 +2324,67 @@ struct PracticeTypeCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct WordBookImageSelector: View {
+    @Binding var selectedBook: WordBook
+    let words: [WordItem]
+    var cardHeight: CGFloat = 110
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(WordBook.allCases) { book in
+                    Button {
+                        selectedBook = book
+                    } label: {
+                        ZStack(alignment: .bottomLeading) {
+                            Image(book.coverAssetName)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 168, height: cardHeight)
+                                .clipped()
+                                .overlay {
+                                    LinearGradient(
+                                        colors: [.clear, .black.opacity(0.58)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(book.title)
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+
+                                Text(book.subtitle)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.82))
+
+                                Text("\(filterWords(words, by: book).count) 词")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.92))
+                            }
+                            .padding(10)
+                        }
+                        .frame(width: 168, height: cardHeight)
+                        .background(book.color.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(
+                                    selectedBook == book ? book.color : .white.opacity(0.12),
+                                    lineWidth: selectedBook == book ? 2 : 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(height: cardHeight + 4)
     }
 }
 
